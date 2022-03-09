@@ -1,0 +1,127 @@
+---
+title: "Cálculos para metodologia de atenção primária"
+output: html_notebook
+---
+
+# Configurando ambiente e lendo dados 
+
+Carregando a biblioteca tidyverse
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+```
+
+
+Lendo os dados
+
+```{r message=FALSE, warning=FALSE}
+cadastro_egestorab <- read_delim("https://raw.githubusercontent.com/wandersondsm/obs-cigets/main/analises-ad_hoc/dimensionamento/002%20-%20metodologia%20de%20aps/cadastro_egestorab.csv",";", escape_double = FALSE, locale = locale(date_names = "pt", 
+        encoding = "ISO-8859-1", asciify = TRUE), trim_ws = TRUE) %>% 
+  janitor::clean_names() %>% 
+  select(cnes, ine, total_1221)
+
+
+cadastr_pop_ponderada <- read_delim("https://raw.githubusercontent.com/wandersondsm/obs-cigets/main/analises-ad_hoc/dimensionamento/002%20-%20metodologia%20de%20aps/cadastr_pop_ponderada.csv", ";", escape_double = FALSE, locale = locale(date_names = "pt", 
+        encoding = "ISO-8859-1", asciify = TRUE), 
+  trim_ws = TRUE) %>% 
+  janitor::clean_names()
+```
+
+
+
+Juntando as bases e a agrupando por código ibge, UF, município, CNES e nome da unidade de saúde
+
+
+```{r}
+
+df <- cadastro_egestorab %>% 
+        left_join(cadastr_pop_ponderada, by = c("cnes", "ine")) %>% 
+        group_by(ibge, uf, municipio, cnes, nome_ubs) %>% 
+        summarise(total_pop = sum(total_1221), 
+                  total_ponderada = sum(pop_ponderada)) %>% 
+        mutate(prop_vulneravel = round((total_ponderada/total_pop), 2)) 
+
+DT::datatable(df)
+
+```
+
+# Exemplo de cálculo de estratos de vulnerabilidade
+
+
+A análise da população vulnerável é feita a partir de municípios. Vamos pegar o município de Goiânia como referência. 
+
+Conforme observado, a maior parte das unidades se concentram na faixa de 0,2 a 0,3 de vulnerabilidade.
+
+```{r}
+df_gyn <- df %>% 
+            filter(ibge == "520870")
+
+
+df_gyn %>% 
+  ggplot(aes(x = prop_vulneravel)) + geom_histogram() + theme_minimal()
+```
+
+# Definição de estratos de vulnerabilidade
+
+Vamos pegar o exemplo de três estratos de vulnerabilidade. Para isso, vamos dividir nossa amostra em três intervalos baseados em medidas de posição: 33º percentil (divide os estratos baixo e médio), 66º percentil (divide os estratos médio e alto). 
+
+Para cada categoria de vulnerabilidade, são associados parâmetros de distribuição de equipes por população, conforme a PNAB. A coluna parâmetros estabelece esse resultado. Para vulnerabilidade baixa, a população é dividida por 3.500, para uma população de alta vulnerabilidade, a população é dividida pelo parâmetro de 2.000. 
+
+
+```{r echo=TRUE, message=TRUE, warning=TRUE, paged.print=TRUE}
+# calculando percentis
+q1 <- quantile(df_gyn$prop_vulneravel, probs = c(0.33))
+q2 <- quantile(df_gyn$prop_vulneravel, probs = c(0.66))
+
+# definindo os estratos a partir dos percentis
+df_gyn <- df_gyn %>% 
+  mutate(vulnerabilidade = case_when(prop_vulneravel <= q1 ~ "Baixa",
+                             prop_vulneravel > q1 & prop_vulneravel <= q2 ~ "Média",
+                             prop_vulneravel > q2 ~ "Alta"), 
+         parametros = case_when(vulnerabilidade == "Baixa" ~ 3500, 
+                                vulnerabilidade == "Média" ~ 3000,
+                                vulnerabilidade == "Alta" ~ 2000)) 
+
+
+DT::datatable(df_gyn)
+
+```
+
+# Calculando o total de equipes por unidade 
+
+Para calcular o total de equipes por unidade de saúde, é necessário dividir o parâmetro associado ao estrato pela população adscrita à unidade. Ao todo, com base nestes dados, seriam necessárias 240 equipes no município.
+
+```{r}
+df_gyn <- df_gyn %>% 
+  mutate(total_equipes = total_pop/parametros)
+
+sum(df_gyn$total_equipes)
+
+```
+
+# Calculando o total de profissionais necessários 
+
+O total de profissionais é pela PNAB. Casos em que a política não é mais flexível, o usuário pode ajustar, como o caso de técnicos de enfermagem e agentes comunitários de saúde. 
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=TRUE}
+df_gyn <- df_gyn %>% 
+            mutate(medicos = total_equipes * 1, 
+                   enfermeiros = total_equipes * 1, 
+                   tecnicos = total_equipes * 2,
+                   acs = total_pop/750)
+
+
+```
+
+# Limitações
+
+Essa é uma metodologia que é limitada pela qualidade do dado de entrada. O número da população adscrita é proporcional à capacidade de uma unidade atender a população do seu território. Unidades com maior capacidade operacional, representarão melhor a realidade dos dados. Por isso, pode ser necessário incluir dados primários no desenvolvimento da metodologia, especialmente em relação à população adscrita e os indicadores de vulnerabilidade. 
+
+Além disso, é uma metodologia que utiliza como referência as unidades e não o território. Portanto, áreas que não são cobertas pela atenção primária, ainda que de alta vulnerabilidade, não serão contempladas na análise. 
+
+
+
+
+
+
+
+
